@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+import logging
+
 from odoo import fields, models, api
+
+_logger = logging.getLogger(__name__)
 
 
 class EnrollWizard(models.TransientModel):
@@ -40,10 +44,8 @@ class EnrollWizard(models.TransientModel):
     use_active_domain = fields.Boolean("Use active domain")
     auto_confirm = fields.Boolean("Auto Confirm Enrollments", default=True)
 
-    @api.multi
-    def action_apply(self):
+    def get_objs_active(self):
         beneficiary_obj = self.env["openg2p.beneficiary"]
-        self.ensure_one()
         if self.use_active_domain:
             beneficiaries = beneficiary_obj.search(
                 self.env.context.get("active_domain")
@@ -53,8 +55,22 @@ class EnrollWizard(models.TransientModel):
 
         # if len(beneficiaries) > 1000:
         #     beneficiaries = beneficiaries.sudo().with_delay()
+        return beneficiaries
 
+    @api.multi
+    def action_apply(self):
+        _logger.info("Wizard started Enrollments.")
+        self.ensure_one()
+        beneficiaries = self.get_objs_active()        
+
+        total_count = 0
+        enroll_create_arr = []
         for record in beneficiaries:
+            if total_count % 100 == 0:
+                _logger.info("Wizard Program Enrollments: Total Records Updated: %d." % total_count)
+            total_count += 1
+            # enroll_exists = False
+            _logger.info("Point 1")
             enrol_exists = self.env["openg2p.program.enrollment"].search(
                 [
                     ("beneficiary_id","=",record.id),
@@ -62,24 +78,31 @@ class EnrollWizard(models.TransientModel):
                     ("state", "in", ("open", "draft")),
                 ]
             )
-            if len(enrol_exists) == 0:
-                record.program_enroll(
-                    program_id=self.program_id.id,
-                    #category_id=self.category_id.id,
-                    date_start=self.date_start,
-                    date_end=self.date_end if self.date_end else self.program_id.date_end,
-                    program_amount=self.program_amount,
-                    total_amount=self.total_amount,
-                    confirm=self.auto_confirm,
+            _logger.info("Point 1.25")
+            if len(enrol_exists) > 0:
+                _logger.info("Point 1.5")
+                enrol_exists.write(
+                    {
+                        "date_start": self.date_start,
+                        "date_end": self.date_end if self.date_end else self.program_id.date_end,
+                        "program_amount": self.program_amount,
+                        "total_amount": self.total_amount,
+                    }
                 )
-            else:
-                overwrite_dict = {
+            elif len(enrol_exists) == 0:
+                _logger.info("Point 2")
+                enroll_create_arr.append({
+                    "beneficiary_id": record.id,
+                    "program_id": self.program_id.id,
+                    # "category_id": self.category_id.id,
                     "date_start": self.date_start,
                     "date_end": self.date_end if self.date_end else self.program_id.date_end,
                     "program_amount": self.program_amount,
                     "total_amount": self.total_amount,
-                }
-                if self.auto_confirm:
-                    overwrite_dict["state"] = "open"
-                enrol_exists.write(overwrite_dict)
+                    "state": "open" if self.auto_confirm else "draft",
+                })
+            _logger.info("Point 3")
+        _logger.info("Point 3.5")
+        self.env["openg2p.program.enrollment"].create(enroll_create_arr)
+        _logger.info("Point 4")
         return {"type": "ir.actions.act_window_close"}

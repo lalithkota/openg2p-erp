@@ -143,7 +143,7 @@ class ProgramEnrollmentImport(models.Model):
             existing_enrols = self.search([("program_id", "=", program_id.id),("beneficiary_id", "=", existing_bens.beneficiary_id.id), ("state", "in", ("open", "draft"))])
             if len(existing_enrols) == 0:
                 try:
-                    enrol = self.create({
+                    enrol = self.import_create_program_enroll_sql({
                         "program_id": program_id.id,
                         "beneficiary_id": existing_bens.beneficiary_id.id,
                         "date_start": enrol_date_start if enrol_date_start else program_id.date_start,
@@ -151,8 +151,18 @@ class ProgramEnrollmentImport(models.Model):
                         "program_amount": enrol_program_amount if enrol_program_amount else 0.0,
                         "total_amount": enrol_total_amount if enrol_total_amount else 0.0,
                         "state": self.get_state_key_from_value(enrol_state) if enrol_state else "open"
-                    })
-                    success_ids.append(enrol.id)
+                    })[0]
+                    success_ids.append(enrol)
+                    # enrol = self.create({
+                    #     "program_id": program_id.id,
+                    #     "beneficiary_id": existing_bens.beneficiary_id.id,
+                    #     "date_start": enrol_date_start if enrol_date_start else program_id.date_start,
+                    #     "date_end": enrol_date_end if enrol_date_end else program_id.date_end,
+                    #     "program_amount": enrol_program_amount if enrol_program_amount else 0.0,
+                    #     "total_amount": enrol_total_amount if enrol_total_amount else 0.0,
+                    #     "state": self.get_state_key_from_value(enrol_state) if enrol_state else "open"
+                    # })
+                    # success_ids.append(enrol.id)
                     enrol_create_count += 1
                 except Exception as e:
                     error_messages.append({
@@ -196,15 +206,25 @@ class ProgramEnrollmentImport(models.Model):
         data = self.prepare_data_ben(ben_base_id, row_data)
         data["company_id"] = curr_company_id
         data["belonging_company_ids"] = "," + str(curr_company_id) + ","
-        ben = self.env["openg2p.beneficiary"].create(data)
+        ben = self.import_create_ben_sql(data)[0]
         if beneficiary_base_id_type:
-            return self.env["openg2p.beneficiary.id_number"].create(
+            return self.env["openg2p.beneficiary.id_number"].browse(self.import_create_record_sql(
+                "openg2p.beneficiary.id_number",
                 {
                     "name": ben_base_id,
                     "category_id": ben_base_id_cat.id,
-                    "beneficiary_id": ben.id
+                    "beneficiary_id": ben
                 }
-            )
+            )[0])
+        # ben = self.env["openg2p.beneficiary"].create(data)
+        # if beneficiary_base_id_type:
+        #     return self.env["openg2p.beneficiary.id_number"].create(
+        #         {
+        #             "name": ben_base_id,
+        #             "category_id": ben_base_id_cat.id,
+        #             "beneficiary_id": ben.id
+        #         }
+        #     )
         return None
     
     def merge_ben_with_data(self, existing_ben_base_id, row_data, curr_company_id):
@@ -253,3 +273,71 @@ class ProgramEnrollmentImport(models.Model):
             if v == value:
                 return k
         return None
+    
+    def import_create_record_sql(self, model_name, vals, is_relation=False):
+        if isinstance(vals, dict):
+            vals = [vals]
+        if not vals:
+            return []
+        
+        all_keys = set()
+        for each_value in vals:
+            all_keys.update(each_value.keys())
+        if not is_relation:
+            all_keys.update(["active","create_uid","create_date","write_uid","write_date"])
+        query = "INSERT INTO " + model_name.replace(".","_") + " ("
+        for i, key in enumerate(all_keys):
+            if i != 0:
+                query += ","
+            query += key
+        query += ") VALUES ("
+        for i, value in enumerate(vals):
+            if i != 0:
+                query += " ,("
+            
+            if not is_relation:
+                value["active"] = True
+                value["create_uid"] = self.env.user.id
+                value["create_date"] = fields.Datetime.now()
+                value["write_uid"] = self.env.user.id
+                value["write_date"] = fields.Datetime.now()
+            for j, key in enumerate(all_keys):
+                if j != 0:
+                    query += ','
+                curr_val = value.get(key, None)
+                if not curr_val:
+                    query += "NULL"
+                elif isinstance(curr_val, int):
+                    query += str(curr_val)
+                elif isinstance(curr_val, bool):
+                    query += "TRUE" if curr_val else "NULL"
+                else:
+                    query += "'" + str(curr_val) + "'"
+            query += ")"
+        if not is_relation:
+            self.env.cr.execute(query + " RETURNING id" + ";")
+            return [i[0] for i in self.env.cr.fetchall()]
+        else:
+            self.env.cr.execute(query + ";")
+            return None
+    
+    def import_create_ben_sql(self, vals):
+        if isinstance(vals, dict):
+            vals = [vals]
+        for value in vals:
+            value["ref"] = self.env["openg2p.beneficiary"]._generate_ref()
+        return self.import_create_record_sql("openg2p.beneficiary", vals)
+    
+    def import_create_program_enroll_sql(self, vals):
+        if isinstance(vals, dict):
+            vals = [vals]
+        return_id = self.import_create_record_sql("openg2p.program.enrollment", vals)
+        rel_vals = [
+            {
+                "openg2p_beneficiary_id": value["beneficiary_id"],
+                "openg2p_program_id": value["program_id"],
+            }
+            for value in vals
+        ]
+        self.import_create_record_sql("openg2p_beneficiary_openg2p_program_rel", rel_vals, is_relation=True)
+        return return_id

@@ -1,5 +1,4 @@
 import os
-import csv
 import logging
 
 from odoo import models

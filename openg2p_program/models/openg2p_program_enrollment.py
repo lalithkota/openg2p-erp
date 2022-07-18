@@ -93,10 +93,13 @@ class ProgramEnrollment(models.Model):
 
     @api.model
     def create(self, vals):
-        if vals.get("name", False) in ("/", False):
-            vals["name"] = self.env["ir.sequence"].next_by_code(
-                "openg2p.program.enrollment.ref"
-            )
+        if isinstance(vals, dict):
+            vals = [vals]
+        for value in vals:
+            if value.get("name", False) in ("/", False):
+                value["name"] = self.env["ir.sequence"].next_by_code(
+                    "openg2p.program.enrollment.ref"
+                )
         return super(ProgramEnrollment, self).create(vals)
 
     def _expand_states(self, states, domain, order):
